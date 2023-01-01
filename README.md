@@ -1,4 +1,4 @@
-# Sample Plugin
+# GoLang pclntab parser
 Author: **Jacopo Ferrigno**
 
 _BinaryNinja plugin to parse gopclntab and restore functions names for all GoLang versions._
