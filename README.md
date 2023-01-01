@@ -1,12 +1,22 @@
 # Sample Plugin
-Author: **Vector 35 Inc**
+Author: **Jacopo Ferrigno**
 
-_This is a short description meant to fit on one line._
+_BinaryNinja plugin to parse gopclntab and restore functions names for all GoLang versions._
 
 ## Description:
-This is a longer description meant for a sample plugin that demonstrates the metadata format for Binary Ninja plugins. Note that the [community-plugins repo](https://github.com/Vector35/community-plugins) contains a useful [utility](https://github.com/Vector35/community-plugins/blob/master/generate_plugininfo.py) to validate the plugin.json. Additionally, the [release helper](https://github.com/Vector35/release_helper) plugin is helpful for more easily pushing new releases, incrementing versions, and creating the appropriate GitHub tags.
 
-Note that originally we recommended specifying the contents of this entire file inside of the [plugin.json](./plugin.json) but the latest repository generator will use the readme contents directly which means you should simply leave an empty longdescription field. 
+This plugin will parse the gopclntab and restore the function names extracting the information from the `.gopclntab` section in the binary. If there is no section named .gopclntab it will try to search for the section.
+
+The plugin works for all GoLang version from 12 to 119.
+
+## References
+
+The plugin is based on the following resources.
+
+	https://github.com/f0rki/bn-goloader
+	https://go.dev/src/debug/gosym/pclntab.go
+	https://docs.google.com/document/d/1lyPIbmsYbXnpNj57a261hgOYVpNRcgydurVQIyZOz_o/pub
+
 
 ## License
 
