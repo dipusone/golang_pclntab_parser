@@ -1,4 +1,3 @@
-
 GO_KIND = ('golang_kind', """
 enum golang_kind : uint8_t
 {
@@ -41,15 +40,15 @@ struct golang_type
 {
   int64_t size;
   int64_t ptrdata;
-  int hash;
-  char tflag;
-  char align;
-  char fieldalign;
+  uint32_t hash;
+  uint8_t tflag;
+  uint8_t align;
+  uint8_t fieldalign;
   golang_kind kind;
   int64_t equal_fn;
   int64_t gcData;
-  int nameoff;
-  int typeoff;
+  int32_t nameoff;
+  int32_t typeoff;
   int64_t name;
   int64_t mhdr;
 };

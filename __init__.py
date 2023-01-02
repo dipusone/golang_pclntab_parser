@@ -1,5 +1,5 @@
 from binaryninja import PluginCommand
-from .golang_gopclntab_parser import rename_functions, create_types, parse_go_file
+from .golang_parser import rename_functions, create_types, parse_go_file
 
 PluginCommand.register(
     "golang\\auto-rename functions (gopclntab)",

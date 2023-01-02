@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from operator import attrgetter
 
+import binaryninja
+
 go12magic  = b"\xfb\xff\xff\xff\x00\x00"
 go116magic = b"\xfa\xff\xff\xff\x00\x00"
 go118magic = b"\xf0\xff\xff\xff\x00\x00"
@@ -367,5 +369,230 @@ class GoPclnTab:
                 val
             ))
 
+        nodef_f_repr = ", ".join(f"{name}={value}" for name, value in nodef_f_vals)
+        return f"{self.__class__.__name__}({nodef_f_repr})"
+
+
+
+class GolangTypeKind(IntEnum):
+    INVALID = 0x0
+    BOOL = 0x1
+    INT = 0x2
+    INT8 = 0x3
+    INT16 = 0x4
+    INT32 = 0x5
+    INT64 = 0x6
+    UINT = 0x7
+    UINT8 = 0x8
+    UINT16 = 0x9
+    UINT32 = 0xA
+    UINT64 = 0xB
+    UINTPTR = 0xC
+    FLOAT32 = 0xD
+    FLOAT64 = 0xE
+    COMPLEX64 = 0xF
+    COMPLEX128 = 0x10
+    ARRAY = 0x11
+    CHAN = 0x12
+    FUNC = 0x13
+    INTERFACE = 0x14
+    MAP = 0x15
+    PTR = 0x16
+    SLICE = 0x17
+    STRING = 0x18
+    STRUCT = 0x19
+    UNSAFEPTR = 0x1A
+    CHAN_DIRECTIFACE = 0x32
+    FUNC_DIRECTIFACE = 0x33
+    MAP_DIRECTIFACE = 0x35
+    STRUCT_DIRECTIFACE = 0x39
+
+    @classmethod
+    def _missing_(cls, value):
+        return cls.INVALID
+
+
+@dataclass(repr=False)
+class GolangType:
+
+    raw: bytes
+    rodata_start: int
+
+    size: int = 0
+    ptrdata: int = 0
+    hash: int = 0
+    tflag: int = 0
+    align: int = 0
+    fieldaligh: int = 0
+    kind: GolangTypeKind = GolangTypeKind.INVALID
+    equal_fn: int = 0
+    gcData: int = 0
+    nameOff: int = 0
+    typeOff: int = 0
+    name: int = 0
+    mhdr: int = 0
+
+    SIZE: int = 0x40
+
+    fields = [
+        ('size', 8),
+        ('ptrdata', 8),
+        ('hash', 4),
+        ('tflag', 1),
+        ('align', 1),
+        ('fieldalign', 1),
+        ('golang_kind', 1),
+        ('equal_fn', 8),
+        ('gcData', 8),
+        ('nameOff', 4),
+        ('typeOff', 4),
+        ('name', 8),
+        ('mhdr', 8),
+    ]
+
+    version: GoVersion = GoVersion.ver118
+
+    def __init__(self, raw: bytes, rodata_start: int = 0, version: GoVersion = GoVersion.ver118):
+        self.raw = raw
+        self.rodata_start = rodata_start
+        self.version = version
+        self.__init_from_raw()
+        self.__addr = 0
+
+    def __init_from_raw(self):
+        offset = 0
+        for field, size in self.fields:
+            value = self.field(size, offset)
+            if field == 'golang_kind':
+                value = GolangTypeKind(value)
+            setattr(self, field, value)
+            offset += size
+
+    def field(self, size=4, offset=0) -> int:
+        data = self.raw[offset:offset+size]
+        if size == 1:
+            return data[0]
+        if size == 4:
+            return struct.unpack("I", data)[0]
+        if size == 8:
+            return struct.unpack("Q", data)[0]
+
+    @classmethod
+    def from_bv(cls, bv: binaryninja.BinaryView, address: int, rodata_addr: int, version: GoVersion = GoVersion.ver118):
+        raw = bv.read(address, cls.SIZE)
+        golang_type = cls(raw, rodata_addr, version)
+        golang_type.__addr = address
+        return golang_type
+
+    @property
+    def resolved_name_addr(self) -> int:
+        return self.rodata_start + self.nameOff
+
+    def address_off(self, field: str) -> int:
+        offset = 0
+        for name, size in self.fields:
+            if field == name:
+                return self.__addr + offset
+            offset += size
+
+    def __repr__(self):
+        excluded = ['raw']
+        excluded_types = [bytes]
+
+        nodef_f_vals = []
+
+        for field in dataclasses.fields(self):
+            if field.name in excluded:
+                continue
+            atg = attrgetter(field.name)
+            val = None
+            try:
+                val = atg(self)
+                if type(val) in excluded_types:
+                    continue
+            except AttributeError:
+                pass
+            nodef_f_vals.append((
+                field.name,
+                val
+            ))
+        nodef_f_repr = ", ".join(f"{name}={value}" for name, value in nodef_f_vals)
+        return f"{self.__class__.__name__}({nodef_f_repr})"
+
+
+@dataclass(repr=False)
+class TypeName:
+
+    raw: bytes
+
+    bitfield: int
+    size: int
+    name: str
+
+    version: GoVersion = GoVersion.ver118
+
+    def __init__(self, raw: bytes, version: GoVersion = GoVersion.ver118):
+        self.raw = raw
+        self.bitfield = raw[0]
+        self.version = version
+
+    @classmethod
+    def from_bv(cls, bv: binaryninja.BinaryView, address: int, version: GoVersion = GoVersion.ver118):
+        string_len = bv.read(address + 0x1, 1)
+        offset_from_start = 0x2
+        if version >= GoVersion.ver116:
+            # Skip the bitfield and read the correct size from varint
+            string_len, read = cls.read_varint(bv, address + 0x1)
+            offset_from_start = 0x1 + read
+        name_addr = address + offset_from_start
+        name = bv.get_ascii_string_at(name_addr,
+                                      max_length=string_len,
+                                      require_cstring=False)
+        name = name.value
+        if not name or len(name) == 0:
+            name = ""
+
+        raw = bv.read(address, offset_from_start + string_len)
+
+        type_name = cls(raw, version)
+        type_name.size = string_len
+        type_name.name = name
+        return type_name
+
+    @staticmethod
+    def read_varint(bv, start_addr: int) -> (int, int):
+        shift = 0
+        result = 0
+        read = 0
+        while True:
+            i = bv.read(start_addr + read, 1)[0]
+            result |= (i & 0x7f) << shift
+            shift += 7
+            read += 1
+            if not (i & 0x80):
+                break
+        return result, read
+
+    def __repr__(self):
+        excluded = ['raw']
+        excluded_types = [bytes]
+
+        nodef_f_vals = []
+
+        for field in dataclasses.fields(self):
+            if field.name in excluded:
+                continue
+            atg = attrgetter(field.name)
+            val = None
+            try:
+                val = atg(self)
+                if type(val) in excluded_types:
+                    continue
+            except AttributeError:
+                pass
+            nodef_f_vals.append((
+                field.name,
+                val
+            ))
         nodef_f_repr = ", ".join(f"{name}={value}" for name, value in nodef_f_vals)
         return f"{self.__class__.__name__}({nodef_f_repr})"
