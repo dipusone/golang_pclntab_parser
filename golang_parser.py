@@ -1,6 +1,6 @@
 import binaryninja as bn
 
-from binaryninja import Symbol, SymbolType, redirect_output_to_log
+from binaryninja import Symbol, SymbolType
 
 from .binaryninja_types import *
 from .types import *
@@ -8,8 +8,7 @@ from .types import *
 NAME = 'Golang Loader Helper'
 GoFixLogger = bn.Logger(0, NAME)
 
-
-log_debug = GoFixLogger.log_debug 
+log_debug = GoFixLogger.log_debug
 log_info = GoFixLogger.log_info
 log_warn = GoFixLogger.log_warn
 log_error = GoFixLogger.log_error
@@ -58,7 +57,7 @@ class GoHelper(bn.plugin.BackgroundTaskThread):
             else:
                 log_error("Failed to find section .gopclntab")
                 return
-        
+
         self.gopclntab = GoPclnTab(start_addr,
                                    end_addr,
                                    self.bv[start_addr:end_addr]
@@ -92,7 +91,7 @@ class GoHelper(bn.plugin.BackgroundTaskThread):
             self.gopclntab.funcnametab = self.gopclntab.range(3, 4)  # This contains the names of the functions
             self.gopclntab.cutab = self.gopclntab.range(4, 5)
             self.gopclntab.filetab = self.gopclntab.range(5, 6)
-            self.gopclntab.pctab = self.gopclntab.range(6, 7)            
+            self.gopclntab.pctab = self.gopclntab.range(6, 7)
             self.gopclntab.funcdata = self.gopclntab.data(7)  # This is where the functions info are
             self.gopclntab.functab = self.gopclntab.data(7)
             self.gopclntab.functabsize = (self.gopclntab.nfunctab * 2 + 1) * functabFieldSize
@@ -111,7 +110,7 @@ class GoHelper(bn.plugin.BackgroundTaskThread):
             self.gopclntab.nfunctab = self.gopclntab.uintptr(8)
             self.gopclntab.funcdata = self.gopclntab.raw
             self.gopclntab.funcnametab = self.gopclntab.raw
-            self.gopclntab.functab = self.gopclntab.data_after_offset(8+self.gopclntab.ptrsize)
+            self.gopclntab.functab = self.gopclntab.data_after_offset(8 + self.gopclntab.ptrsize)
             self.gopclntab.functabsize = (self.gopclntab.nfunctab * 2 + 1) * functabFieldSize
             self.gopclntab.functab = self.gopclntab.functab[:self.gopclntab.functabsize]
         else:
@@ -154,15 +153,15 @@ class GoHelper(bn.plugin.BackgroundTaskThread):
         if not bb:
             return None
         return bb.function
-    
+
     @property
     def ptr_size(self):
         return self.gopclntab.ptrsize
-        
+
     def quick_go_version(self) -> GoVersion:
         gopclntab = self.get_section_by_name(".gopclntab")
         start_addr = gopclntab.start
-        return GoVersion.from_magic(self.bv[start_addr:start_addr+6])
+        return GoVersion.from_magic(self.bv[start_addr:start_addr + 6])
 
     def read_varint(self, start_addr: int) -> (int, int):
         shift = 0
@@ -217,7 +216,7 @@ class FunctionRenamer(GoHelper):
                 renamed += 1
             else:
                 log_warn(f"not using function name {name} for function at {hex(function_addr)}")
-                
+
         log_info(f"Created {created} functions")
         log_info(f"Renamed {renamed - created} functions")
         log_info(f"Total {renamed} functions")
@@ -237,8 +236,7 @@ class TypeParser(GoHelper):
         'runtime.makechan',
         'runtime.makemap',
         'runtime.mapiterinit',
-        'runtime.makeslice'
-        ]
+        'runtime.makeslice']
 
     MAX_TYPE_LENGHT = 40
 
@@ -257,7 +255,7 @@ class TypeParser(GoHelper):
 
         for go_type in self.TYPES:
             name, type_str = go_type
-            new_type = self.bv.parse_type_string(type_str)   
+            new_type = self.bv.parse_type_string(type_str)
             if len(new_type) == 0:
                 log_warn(f"Unable to parse type string {name}")
                 continue
@@ -268,7 +266,7 @@ class TypeParser(GoHelper):
         log_info("Searching for functions accessing type objects")
         log_info(f"Will search for {len(self.TYPED)} functions")
         created = 0
-        
+
         for typed_function in self.TYPED:
             functions = self.bv.get_functions_by_name(typed_function)
             if not functions:
@@ -294,7 +292,7 @@ class TypeParser(GoHelper):
                     # funny enough `not <void var>` will return `True`
                     if go_data_type is None:
                         continue
-                        
+
                     go_data_type.type = golang_type
                     # TODO figure out why sometime the type info are not there
                     # the next portion of code might fail
@@ -346,4 +344,3 @@ def parse_go_file(bv):
     fr.join()
     tp = TypeParser(bv)
     return tp.start()
-
