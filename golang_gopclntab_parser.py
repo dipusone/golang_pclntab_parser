@@ -1,6 +1,7 @@
 import binaryninja as bn
 import dataclasses
 import struct
+import string
 
 from binaryninja import Symbol, SymbolType
 from dataclasses import dataclass
@@ -15,6 +16,8 @@ log_debug = GoFixLogger.log_debug
 log_info = GoFixLogger.log_info
 log_warn = GoFixLogger.log_warn
 log_error = GoFixLogger.log_error
+
+# log_debug = log_info
 
 
 go12magic  = b"\xfb\xff\xff\xff\x00\x00"
@@ -385,6 +388,13 @@ class GoPclnTab:
 
 def santize_gofunc_name(name):
     name = name.replace(" ", "")
+    name = name.replace('.', '_')
+    return name
+
+
+def sanitize_gotype_name(name):
+    name = santize_gofunc_name(name)
+    name = name.replace('*', '')
     return name
 
 
@@ -519,6 +529,23 @@ class GoHelper(bn.plugin.BackgroundTaskThread):
     def ptr_size(self):
         return self.gopclntab.ptrsize
         
+    def quick_go_version(self) -> GoVersion:
+        gopclntab = self.get_section_by_name(".gopclntab")
+        start_addr = gopclntab.start
+        return GoVersion.from_magic(self.bv[start_addr:start_addr+6])
+
+    def read_varint(self, start_addr: int) -> int:
+        shift = 0
+        result = 0
+        read = 0
+        while True:
+            i = self.bv.read(start_addr + read, 1)[0]
+            result |= (i & 0x7f) << shift
+            shift += 7
+            read += 1
+            if not (i & 0x80):
+                break
+        return result, read
 
 class FunctionRenamer(GoHelper):
     MIN_FUNCTION_NAME = 2
@@ -567,7 +594,177 @@ class FunctionRenamer(GoHelper):
     def run(self):
         return self.rename_functions()
 
+GO_KIND = ('golang_kind', """
+enum golang_kind : uint8_t
+{
+  INVALID = 0x0,
+  BOOL = 0x1,
+  INT = 0x2,
+  INT8 = 0x3,
+  INT16 = 0x4,
+  INT32 = 0x5,
+  INT64 = 0x6,
+  UINT = 0x7,
+  UINT8 = 0x8,
+  UINT16 = 0x9,
+  UINT32 = 0xA,
+  UINT64 = 0xB,
+  UINTPTR = 0xC,
+  FLOAT32 = 0xD,
+  FLOAT64 = 0xE,
+  COMPLEX64 = 0xF,
+  COMPLEX128 = 0x10,
+  ARRAY = 0x11,
+  CHAN = 0x12,
+  FUNC = 0x13,
+  INTERFACE = 0x14,
+  MAP = 0x15,
+  PTR = 0x16,
+  SLICE = 0x17,
+  STRING = 0x18,
+  STRUCT = 0x19,
+  UNSAFEPTR = 0x1A,
+  CHAN_DIRECTIFACE = 0x32,
+  FUNC_DIRECTIFACE = 0x33,
+  MAP_DIRECTIFACE = 0x35,
+  STRUCT_DIRECTIFACE = 0x39,
+};""")
+
+
+GOLANG_TYPE = ('golang_type', """
+struct golang_type
+{
+  int64_t size;
+  int64_t ptrdata;
+  int hash;
+  char tflag;
+  char align;
+  char fieldalign;
+  golang_kind kind;
+  int64_t equal_fn;
+  int64_t gcData;
+  int nameoff;
+  int typeoff;
+  int64_t name;
+  int64_t mhdr;
+};
+""")
+
+class TypeParser(GoHelper):
+    TYPES = [
+        GO_KIND,
+        GOLANG_TYPE,
+    ]
+
+    TYPED = [
+        'runtime.newobject',
+        'runtime.makechan',
+        'runtime.makemap',
+        'runtime.mapiterinit',
+        'runtime.makeslice'
+        ]
+
+    MAX_TYPE_LENGHT = 40
+
+    def create_types(self):
+        log_info(f"Creating reference types")
+        go_version = self.quick_go_version()
+        log_debug(f"Go Version is {go_version}")
+
+        for segment_name in ('.rodata', '__rodata'):
+            rodata = self.get_section_by_name(segment_name)
+            if rodata:
+                break
+        else:
+            log_error("Unable to find any rodata sections. Terminating")
+            return
+
+
+        for go_type in self.TYPES:
+            name, type_str = go_type
+            new_type = self.bv.parse_type_string(type_str)   
+            if len(new_type) == 0:
+                log_warn(f"Unable to parse type string {name}")
+                continue
+            self.bv.define_user_type(name, new_type[0])
+
+        golang_type = self.bv.get_type_by_name(GOLANG_TYPE[0])
+
+        log_info("Searching for functions accessing type objects")
+        log_info(f"Will search for {len(self.TYPED)}")
+        
+        for typed_function in self.TYPED:
+            functions = self.bv.get_functions_by_name(typed_function)
+            if not functions:
+                sanitazed_typed_function = santize_gofunc_name(typed_function)
+                functions = self.bv.get_functions_by_name(sanitazed_typed_function)
+
+            for function in functions:
+                log_info(f"Parsing function {function.name}")
+                ptr_var = function.parameter_vars[0]
+                ptr_var.type = bn.Type.pointer(self.bv.arch, golang_type)
+
+                for caller_site in function.caller_sites:
+                    mlil = caller_site.mlil
+                    if mlil.operation != bn.MediumLevelILOperation.MLIL_CALL:
+                        log_debug(f"Callsite at 0x{mlil.address:x} is not a call, skipping")
+                        continue
+
+                    param = mlil.params[0].value.value
+                    go_data_type = self.bv.get_data_var_at(param)
+                    # get_data_var_at will return void on error
+                    # funny enough `not <void var>` will return `True`
+                    if go_data_type is None:
+                        continue
+                        
+                    go_data_type.type = golang_type
+                    # FIXME figure out why sometime the type info are not there
+                    # for now use an offset
+                    # name_offset = go_data_type.value['nameoff']
+
+                    name_offset = go_data_type.address + 0x28
+                    name_struct_offset = self.get_pointer_at(name_offset, 0x4)
+                    name_struct_addr = rodata.start + name_struct_offset
+                    offset_from_start = 0x2
+                    string_len = self.bv.read(name_struct_addr + 0x1, 1)
+                    if go_version >= GoVersion.ver116:
+                        # Skip the bitfield and size
+                        string_len, read = self.read_varint(name_struct_addr + 0x1)
+                        offset_from_start = 0x1 + read
+                    name_addr = name_struct_addr + offset_from_start
+                    name = self.bv.get_ascii_string_at(name_addr,
+                                                       max_length=string_len,
+                                                       require_cstring=False)
+                    name = name.value
+                    if not name or len(name) == 0:
+                        log_debug("Invalid Name, skipping")
+                    log_debug(f"Found name at 0x{name_addr:x} with value {name}")
+                    sanitazed_name = sanitize_gotype_name(name)
+                    go_data_type.name = f"{sanitazed_name}_type"
+                    # add cross reference for later
+                    self.bv.add_user_data_ref(name_offset, name_struct_addr)
+
+        log_debug("Terminating")
+
+
+    def run(self):
+        return self.create_types()
+
 
 def rename_functions(bv):
     helper = FunctionRenamer(bv)
     return helper.start()
+
+
+def create_types(bv):
+    helper = TypeParser(bv)
+    return helper.start()
+
+
+def parse_go_file(bv):
+    fr = FunctionRenamer(bv)
+    fr.start()
+    fr.join()
+    tp = TypeParser(bv)
+    return tp.start()
+
