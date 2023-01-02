@@ -1,7 +1,7 @@
-# GoLang pclntab parser
+# GoLang binary parser
 Author: **Jacopo Ferrigno**
 
-_BinaryNinja plugin to parse GoLang binaries and restore some information, like function names._
+_BinaryNinja plugin to parse GoLang binaries and restore some information, like function names and type information._
 
 ## Description:
 
