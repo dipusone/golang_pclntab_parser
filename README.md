@@ -1,13 +1,13 @@
 # GoLang pclntab parser
 Author: **Jacopo Ferrigno**
 
-_BinaryNinja plugin to parse gopclntab and restore functions names for all GoLang versions._
+_BinaryNinja plugin to parse GoLang binaries and restore some information, like function names._
 
 ## Description:
 
-This plugin will parse the gopclntab and restore the function names extracting the information from the `.gopclntab` section in the binary. If there is no section named .gopclntab it will try to search for the section.
-
-It will also try to recover type information and restore them
+This plugin will parse a go binary and restore some information like:
+- Function names by parsing the `.gopclntab` section in the binary. If there is no section named .gopclntab it will try to search for it.
+- Recover type information by parsing specific callsbuthe gopclntab and restore the function names extracting the information from the `.gopclntab` section in the binary.
 
 The plugin works for all GoLang version from 12 to 119.
 
@@ -20,7 +20,6 @@ The plugin is based on the following resources.
 	https://docs.google.com/document/d/1lyPIbmsYbXnpNj57a261hgOYVpNRcgydurVQIyZOz_o/pub
 	https://securelist.com/extracting-type-information-from-go-binaries/104715/
 	https://github.com/golang/go/blob/fad4a16fd43f6a72b6917eff656be27522809074/src/reflect/type.go#L317
-
 
 
 ## License

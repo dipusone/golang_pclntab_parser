@@ -25,7 +25,6 @@ def santize_gofunc_name(name):
 
 def sanitize_gotype_name(name):
     name = santize_gofunc_name(name)
-    name = name.replace('*', '')
     return name
 
 
@@ -320,6 +319,9 @@ class TypeParser(GoHelper):
                     self.bv.add_user_data_ref(
                         gotype.address_off('nameOff'),
                         gotype.resolved_name_addr)
+
+                    name_datavar = self.bv.get_data_var_at(gotype.resolved_name_addr)
+                    name_datavar.name = f"{go_data_type.name}_name"
                     created += 1
 
         log_info(f"Created {created} types")
