@@ -49,7 +49,5 @@ struct golang_type
   int64_t gcData;
   int32_t nameoff;
   int32_t typeoff;
-  int64_t name;
-  int64_t mhdr;
 };
 """)

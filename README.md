@@ -7,7 +7,9 @@ _BinaryNinja plugin to parse GoLang binaries and restore some information, like 
 
 This plugin will parse a go binary and restore some information like:
 - Function names by parsing the `.gopclntab` section in the binary. If there is no section named .gopclntab it will try to search for it.
-- Recover type information by parsing specific callsbuthe gopclntab and restore the function names extracting the information from the `.gopclntab` section in the binary.
+- Comment the function with the filename from which the function comes
+- Print the list of files in the binary
+- Recover type information and names by parsing specific callsites gopclntab.
 
 The plugin works for all GoLang version from 12 to 119.
 

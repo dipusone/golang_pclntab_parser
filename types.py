@@ -80,11 +80,11 @@ class FuncEntry:
 
     args: int = 0
     frame: int = 0
-    pcsp: int = 0
+    deferreturn: int = 0
     pcfile: int = 0
     pcln: int = 0
     nfuncdata: int = 0
-    npcdata: int = 0
+    cuOffset: int = 0
 
     version: GoVersion = GoVersion.ver118
 
@@ -96,7 +96,7 @@ class FuncEntry:
         self.__init_from_raw()
 
     def __init_from_raw(self):
-        fields = ["nameOffset", "args", "frame", "pcsp", "pcfile", "pcln", "nfuncdata", "npcdata"]
+        fields = ["nameOffset", "args", "frame", "deferreturn", "pcfile", "pcln", "nfuncdata", "cuOffset"]
 
         for idx, field in enumerate(fields, 1):
             value = self.field(idx)
@@ -205,8 +205,6 @@ class GoPclnTab:
 
     nfiletab: int = 0
 
-    # Ignore maps which are use for caching
-
     def __init__(self, start, end, raw):
         self.start = start
         self.end = end
@@ -224,7 +222,7 @@ class GoPclnTab:
 
     def offset(self, word: int) -> int:
         off = 8 + word * self.ptrsize
-        data = self.raw[off:off +self.ptrsize]
+        data = self.raw[off:off + self.ptrsize]
 
         if self.ptrsize == 8:
             return struct.unpack("Q", data)[0]
@@ -243,7 +241,7 @@ class GoPclnTab:
         return self.raw[ostart:oend]
 
     def uintptr(self, offset: int) -> int:
-        value = self.raw[offset:offset +self.ptrsize]
+        value = self.raw[offset:offset + self.ptrsize]
         return self.value_to_uintptr(value)
 
     def value_to_uintptr(self, value: bytes) -> int:
@@ -347,6 +345,153 @@ class GoPclnTab:
         function.resolvedName = self.funcName(function.nameOffset)
         return function
 
+    def fileName(self, idx) -> bytes:
+        if self.version == GoVersion.ver12:
+            start = 4 * (idx + 1)
+            offset = struct.unpack("I", self.filetab[start:start + 4])[0]
+            string_end = self.funcdata.find(0, offset)
+            string = self.funcdata[offset:string_end]
+            return string
+        else:
+            offset = 0
+            for i in range(idx + 1):
+                string_end = self.filetab.find(0, offset)
+                string = self.filetab[offset:string_end]
+                if i == idx:
+                    return string
+                offset += len(string) + 1
+        return b""
+
+    def pc2filename(self, function: FuncEntry) -> bytes:
+        """
+        func (t *LineTable) go12PCToFile(pc uint64) (file string) {
+            entry := f.entryPC()
+            filetab := f.pcfile()
+            fno := t.pcvalue(filetab, entry, pc)
+            if t.version == ver12 {
+                if fno <= 0 {
+                    return ""
+                }
+                return t.string(t.binary.Uint32(t.filetab[4*fno:]))
+            }
+            // Go ≥ 1.16
+            if fno < 0 { // 0 is valid for ≥ 1.16
+                return ""
+            }
+            cuoff := f.cuOffset()
+            if fnoff := t.binary.Uint32(t.cutab[(cuoff+uint32(fno))*4:]); fnoff != ^uint32(0) {
+                return t.stringFrom(t.filetab, fnoff)
+            }
+            return ""
+        }
+        """
+        entry = function.entry
+        filetab = function.pcfile
+        targetpc = function.entry
+        offset = self.pcvalue(filetab, entry, targetpc)
+
+        if self.version == GoVersion.ver12:
+            if offset <= 0:
+                return b''
+            else:
+                return self.fileName(offset - 1)
+        if offset < 0:
+            return b''
+
+        compilation_unit_offset = function.cuOffset
+        start = (compilation_unit_offset + offset) * 4
+        offset = struct.unpack("I", self.cutab[start:start + 4])[0]
+        if offset != self.make_mask(4):
+            string_end = self.filetab.find(0, offset)
+            string = self.filetab[offset:string_end]
+            return string
+        return b''
+
+    def pcvalue(self, offset: int, pc: int, targetpc: int) -> int:
+        """
+        func (t *LineTable) pcvalue(off uint32, entry, targetpc uint64) int32 {
+            p := t.pctab[off:]
+
+            val := int32(-1)
+            pc := entry
+            for t.step(&p, &pc, &val, pc == entry) {
+                if targetpc < pc {
+                    return val
+                }
+            }
+            return -1
+        }
+        """
+        val = -1
+        offset, pc, val, ok = self.step(self.pctab, offset, pc, val, True)
+        while ok:
+            if targetpc < pc:
+                return val
+            offset, pc, val, ok = self.step(self.pctab, offset, pc, val, False)
+        return -1
+
+    def step(self, table: bytes, offset_in_table: int, pc: int, val: int, first: bool) -> (int, int, int, bool):
+        """
+        // step advances to the next pc, value pair in the encoded table.
+        func (t *LineTable) step(p *[]byte, pc *uint64, val *int32, first bool) bool {
+            uvdelta := t.readvarint(p)
+            if uvdelta == 0 && !first {
+                return false
+            }
+            if uvdelta&1 != 0 {
+                uvdelta = ^(uvdelta >> 1)
+            } else {
+                uvdelta >>= 1
+            }
+            vdelta := int32(uvdelta) -> there might be some type/sign shenanigans
+            pcdelta := t.readvarint(p) * t.quantum
+            *pc += uint64(pcdelta)
+            *val += vdelta
+            return true
+        }
+        """
+        uvdelta, read = self.read_varint(table, offset_in_table)
+        offset_in_table += read
+
+        if uvdelta == 0 and not first:
+            return 0, 0, -1, False
+
+        if uvdelta & 1:
+            mask = self.make_mask(read)
+            uvdelta = ~(uvdelta >> 1) & mask
+        else:
+            uvdelta = uvdelta >> 1
+
+        vdelta = uvdelta  # There might be some sign parsing/shenanigans in the original code
+        pcdelta, read = self.read_varint(table, offset_in_table)
+        offset_in_table += read
+        pcdelta = pcdelta * self.quantum
+
+        new_pc = pc + pcdelta
+        new_val = val + vdelta
+        return offset_in_table, new_pc, new_val, True
+
+    @staticmethod
+    def read_varint(raw: bytes, offset: int = 0) -> (int, int):
+        shift = 0
+        result = 0
+        read = 0
+        while True:
+            i = raw[offset + read]
+            result |= (i & 0x7f) << shift
+            shift += 7
+            read += 1
+            if not (i & 0x80):
+                break
+        return result, read
+
+    @staticmethod
+    def make_mask(bytes_cnt: int) -> int:
+        mask = 0
+        for i in range(bytes_cnt):
+            mask = mask << 8 | 0xff
+        return mask
+
     def __repr__(self):
         excluded = ['raw']
         excluded_types = [bytes]
@@ -371,7 +516,6 @@ class GoPclnTab:
 
         nodef_f_repr = ", ".join(f"{name}={value}" for name, value in nodef_f_vals)
         return f"{self.__class__.__name__}({nodef_f_repr})"
-
 
 
 class GolangTypeKind(IntEnum):
@@ -469,7 +613,7 @@ class GolangType:
             offset += size
 
     def field(self, size=4, offset=0) -> int:
-        data = self.raw[offset:offset+size]
+        data = self.raw[offset:offset + size]
         if size == 1:
             return data[0]
         if size == 4:

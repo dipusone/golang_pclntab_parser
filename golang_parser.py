@@ -1,9 +1,11 @@
 import binaryninja as bn
+import struct
 
 from binaryninja import Symbol, SymbolType
 
 from .binaryninja_types import *
 from .types import *
+
 
 NAME = 'Golang Loader Helper'
 GoFixLogger = bn.Logger(0, NAME)
@@ -28,10 +30,12 @@ def sanitize_gotype_name(name):
 
 
 class GoHelper(bn.plugin.BackgroundTaskThread):
-    def __init__(self, bv: bn.BinaryView):
-        super().__init__(NAME, True)
+    def __init__(self, bv: bn.BinaryView, name: str = None):
+        name = f"{NAME} ({name})" if name else NAME
+        super().__init__(name, True)
         self.bv = bv
         self.br = bn.binaryview.BinaryReader(bv)
+        # Consider caching the table as class variable
         self.gopclntab = None
 
     def init_gopclntab(self):
@@ -110,9 +114,16 @@ class GoHelper(bn.plugin.BackgroundTaskThread):
             self.gopclntab.nfunctab = self.gopclntab.uintptr(8)
             self.gopclntab.funcdata = self.gopclntab.raw
             self.gopclntab.funcnametab = self.gopclntab.raw
+            self.gopclntab.pctab = self.gopclntab.raw
             self.gopclntab.functab = self.gopclntab.data_after_offset(8 + self.gopclntab.ptrsize)
             self.gopclntab.functabsize = (self.gopclntab.nfunctab * 2 + 1) * functabFieldSize
+            fileoff = struct.unpack("I",
+                                    self.gopclntab.functab[self.gopclntab.functabsize:self.gopclntab.functabsize + 4])[0]
             self.gopclntab.functab = self.gopclntab.functab[:self.gopclntab.functabsize]
+            self.gopclntab.filetab = self.gopclntab.data_after_offset(fileoff)
+            self.gopclntab.nfiletab = struct.unpack("I", self.gopclntab.filetab[:4])[0]
+            self.gopclntab.filetab = self.gopclntab.filetab[:(self.gopclntab.nfiletab + 1) * 4]
+
         else:
             raise ValueError("Invalid go version")
 
@@ -220,9 +231,74 @@ class FunctionRenamer(GoHelper):
         log_info(f"Created {created} functions")
         log_info(f"Renamed {renamed - created} functions")
         log_info(f"Total {renamed} functions")
+        self.bv.update_analysis_and_wait()
 
     def run(self):
         return self.rename_functions()
+
+
+class PrintFiles(GoHelper):
+
+    def print_files(self):
+        try:
+            self.init_gopclntab()
+        except ValueError:
+            log_error("Golang version not supported")
+            return
+
+        for fidx in range(self.gopclntab.nfiletab):
+            file_name = self.gopclntab.fileName(fidx)
+            log_info(file_name.decode('utf-8'))
+
+    def run(self):
+        return self.print_files()
+
+
+class FunctionCommenter(GoHelper):
+
+    OVERRIDE_COMMENT = True
+    COMMENT_KEY = "File:"
+
+    def comment_functions(self):
+        try:
+            self.init_gopclntab()
+        except ValueError:
+            log_error("Golang version not supported")
+            return
+
+        log_info("Commenting functions based on .gopclntab section")
+        log_info(f"gopclntab contains {self.gopclntab.nfunctab} functions")
+
+        commented = 0
+
+        for fidx in range(self.gopclntab.nfunctab):
+            if self.gopclntab.version == GoVersion.ver12:
+                function = self.gopclntab.go12FuncInfo(fidx)
+            else:
+                function = self.gopclntab.funcInfo(fidx)
+            function_addr = function.entry
+
+            func = self.bv.get_function_at(function_addr)
+            # Parse only already existing functions
+            if not func:
+                continue
+
+            filename = self.gopclntab.pc2filename(function)
+            if not filename:
+                continue
+
+            if not self.OVERRIDE_COMMENT and func.comment:
+                log_debug("Already commented, skipping")
+                continue
+
+            comment = f"{self.COMMENT_KEY} {filename.decode('utf-8')}"
+            func.comment = comment
+            commented += 1
+
+        log_info(f"Commented {commented} functions")
+
+    def run(self):
+        return self.comment_functions()
 
 
 class TypeParser(GoHelper):
@@ -244,6 +320,8 @@ class TypeParser(GoHelper):
         log_info(f"Creating reference types")
         go_version = self.quick_go_version()
         log_debug(f"Go Version is {go_version}")
+
+        already_parsed = set()
 
         for segment_name in ('.rodata', '__rodata'):
             rodata = self.get_section_by_name(segment_name)
@@ -280,8 +358,12 @@ class TypeParser(GoHelper):
                 ptr_var.type = bn.Type.pointer(self.bv.arch, golang_type)
                 log_debug(f"Parsing xrefs to {function.name}")
                 for caller_site in function.caller_sites:
-
-                    mlil = caller_site.mlil
+                    try:
+                        mlil = caller_site.mlil
+                    except:
+                        log_debug("Unable to get the mlil for instruction")
+                        continue
+                        
                     if not mlil or mlil.operation != bn.MediumLevelILOperation.MLIL_CALL:
                         log_debug(f"Callsite at 0x{mlil.address:x} is not a call, skipping")
                         continue
@@ -292,6 +374,8 @@ class TypeParser(GoHelper):
                     # funny enough `not <void var>` will return `True`
                     if go_data_type is None:
                         continue
+                    if param in already_parsed:
+                        log_debug(f"Skipping already parsed at 0x{param:x}")
 
                     go_data_type.type = golang_type
                     # TODO figure out why sometime the type info are not there
@@ -313,19 +397,41 @@ class TypeParser(GoHelper):
                     log_debug(f"Found name at 0x{gotype.resolved_name_addr:x} with value {name}")
                     sanitazed_name = sanitize_gotype_name(name)
                     go_data_type.name = f"{sanitazed_name}_type"
-                    # add cross-reference for convenience
+                    # add cross-reference for convenience (both directions)
                     self.bv.add_user_data_ref(
                         gotype.address_off('nameOff'),
                         gotype.resolved_name_addr)
 
+                    self.bv.add_user_data_ref(
+                        gotype.resolved_name_addr,
+                        gotype.address_off('nameOff')
+                    )
+
                     name_datavar = self.bv.get_data_var_at(gotype.resolved_name_addr)
                     name_datavar.name = f"{go_data_type.name}_name"
+                    already_parsed.add(param)
                     created += 1
 
         log_info(f"Created {created} types")
 
     def run(self):
         return self.create_types()
+
+
+class RunAll(bn.plugin.BackgroundTaskThread):
+    def __init__(self, bv):
+        super().__init__(NAME, True)
+        self.bv = bv
+        self.analysis = []
+        self.analysis.append(FunctionRenamer(bv))
+        self.analysis.append(FunctionCommenter(bv))
+        self.analysis.append(TypeParser(bv))
+
+    def run(self):
+        for analysis in self.analysis:
+            analysis.start()
+            analysis.join()
+        log_info(f"Terminated all analysis")
 
 
 def rename_functions(bv):
@@ -338,9 +444,16 @@ def create_types(bv):
     return helper.start()
 
 
-def parse_go_file(bv):
-    fr = FunctionRenamer(bv)
-    fr.start()
-    fr.join()
-    tp = TypeParser(bv)
-    return tp.start()
+def print_files(bv):
+    helper = PrintFiles(bv)
+    return helper.start()
+
+
+def comment_functions(bv):
+    helper = FunctionCommenter(bv)
+    return helper.start()
+
+
+def parse_go_file(bv: bn.BinaryView):
+    ra = RunAll(bv)
+    return ra.start()
