@@ -573,8 +573,6 @@ class GolangType:
     gcData: int = 0
     nameOff: int = 0
     typeOff: int = 0
-    name: int = 0
-    mhdr: int = 0
 
     SIZE: int = 0x40
 
@@ -589,9 +587,7 @@ class GolangType:
         ('equal_fn', 8),
         ('gcData', 8),
         ('nameOff', 4),
-        ('typeOff', 4),
-        ('name', 8),
-        ('mhdr', 8),
+        ('typeOff', 4)
     ]
 
     version: GoVersion = GoVersion.ver118
@@ -631,6 +627,10 @@ class GolangType:
     @property
     def resolved_name_addr(self) -> int:
         return self.rodata_start + self.nameOff
+
+    @property
+    def resolved_type_off(self) -> int:
+        return self.rodata_start + self.typeOff
 
     def address_off(self, field: str) -> int:
         offset = 0

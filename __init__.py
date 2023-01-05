@@ -1,5 +1,5 @@
 from binaryninja import PluginCommand
-from .golang_parser import rename_functions, create_types, parse_go_file, print_files, comment_functions
+from .golang_parser import rename_functions, create_types, parse_go_file, print_files, comment_functions, create_type_at_address
 
 PluginCommand.register(
     "golang\\auto-rename functions (gopclntab)",
@@ -15,6 +15,12 @@ PluginCommand.register(
     "golang\\Apply types",
     "Automatically apply type information",
     create_types)
+
+PluginCommand.register_for_address(
+    "golang\\Apply type at address",
+    "Automatically apply type information starting from current address",
+    create_type_at_address)
+
 
 PluginCommand.register(
     "golang\\Print file list",

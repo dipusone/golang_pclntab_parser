@@ -15,7 +15,7 @@ log_info = GoFixLogger.log_info
 log_warn = GoFixLogger.log_warn
 log_error = GoFixLogger.log_error
 
-# log_debug = log_info
+log_debug = log_info
 
 
 def santize_gofunc_name(name):
@@ -312,9 +312,14 @@ class TypeParser(GoHelper):
         'runtime.makechan',
         'runtime.makemap',
         'runtime.mapiterinit',
-        'runtime.makeslice']
+        'runtime.makeslice'
+    ]
 
     MAX_TYPE_LENGHT = 40
+
+    def __init__(self, bv: bn.BinaryView, name: str = None, target: int = None):
+        super().__init__(bv, name)
+        self.target = target
 
     def create_types(self):
         log_info(f"Creating reference types")
@@ -322,6 +327,8 @@ class TypeParser(GoHelper):
         log_debug(f"Go Version is {go_version}")
 
         already_parsed = set()
+        data_vars = []
+        created = 0
 
         for segment_name in ('.rodata', '__rodata'):
             rodata = self.get_section_by_name(segment_name)
@@ -341,9 +348,76 @@ class TypeParser(GoHelper):
 
         golang_type = self.bv.get_type_by_name(GOLANG_TYPE[0])
 
+        if self.target:
+            data_vars.append((self.target, 0))
+        else:
+            data_vars = self.collect_xrefs(golang_type)
+
+        while len(data_vars) > 0:
+            data_var_addr, parent = data_vars.pop(0)
+            go_data_type = self.bv.get_data_var_at(data_var_addr)
+            # get_data_var_at will return None on error
+            # funny enough `not <void var>` is `True`
+            if go_data_type is None:
+                go_data_type = self.bv.define_user_data_var(data_var_addr, golang_type)
+            if data_var_addr in already_parsed:
+                log_debug(f"Skipping already parsed at 0x{data_var_addr:x}")
+
+            go_data_type.type = golang_type
+            # TODO figure out why sometimes the type info are not there
+            # the next portion of code might fail
+            # name_offset = go_data_type.value['nameoff']
+            # so use a custom dataclass instead
+            try:
+                gotype = GolangType.from_bv(self.bv,
+                                            go_data_type.address,
+                                            rodata.start,
+                                            go_version
+                                            )
+                type_name = TypeName.from_bv(self.bv,
+                                             gotype.resolved_name_addr,
+                                             go_version
+                                             )
+            except:
+                continue
+            name = type_name.name
+            if not name or len(name) == 0:
+                log_debug("Invalid Name, skipping")
+                continue
+
+            log_debug(f"Found name at 0x{gotype.resolved_name_addr:x} with value {name}")
+
+            sanitazed_name = sanitize_gotype_name(name)
+            go_data_type.name = f"{sanitazed_name}_type"
+            # add cross-reference for convenience
+            self.bv.add_user_data_ref(
+                gotype.address_off('nameOff'),
+                gotype.resolved_name_addr)
+
+            if parent:
+                self.bv.add_user_data_ref(
+                    parent,
+                    data_var_addr
+                )
+
+            name_datavar = self.bv.get_data_var_at(gotype.resolved_name_addr)
+            name_datavar.name = f"{go_data_type.name}_name"
+
+            # get any type referencing this type
+            if gotype.typeOff != 0x0:
+                log_debug("Found type pointing to this type, adding to set to see")
+                log_debug(f"Dest will be {gotype.resolved_type_off}")
+                data_vars.insert(0, (gotype.resolved_type_off, gotype.address_off('typeOff')))
+
+            already_parsed.add(data_var_addr)
+            created += 1
+
+        log_info(f"Created {created} types")
+
+    def collect_xrefs(self, golang_type: bn.Type) -> list:
+        data_vars = []
         log_info("Searching for functions accessing type objects")
         log_info(f"Will search for {len(self.TYPED)} functions")
-        created = 0
 
         for typed_function in self.TYPED:
             functions = self.bv.get_functions_by_name(typed_function)
@@ -357,62 +431,20 @@ class TypeParser(GoHelper):
                 ptr_var = function.parameter_vars[0]
                 ptr_var.type = bn.Type.pointer(self.bv.arch, golang_type)
                 log_debug(f"Parsing xrefs to {function.name}")
+
+                # Collect direct references, since after we have to expand the list
+                # with the references from typeoff
                 for caller_site in function.caller_sites:
                     try:
                         mlil = caller_site.mlil
                     except:
                         log_debug("Unable to get the mlil for instruction")
                         continue
-                        
                     if not mlil or mlil.operation != bn.MediumLevelILOperation.MLIL_CALL:
                         log_debug(f"Callsite at 0x{mlil.address:x} is not a call, skipping")
                         continue
-
-                    param = mlil.params[0].value.value
-                    go_data_type = self.bv.get_data_var_at(param)
-                    # get_data_var_at will return None on error
-                    # funny enough `not <void var>` will return `True`
-                    if go_data_type is None:
-                        continue
-                    if param in already_parsed:
-                        log_debug(f"Skipping already parsed at 0x{param:x}")
-
-                    go_data_type.type = golang_type
-                    # TODO figure out why sometime the type info are not there
-                    # the next portion of code might fail
-                    # name_offset = go_data_type.value['nameoff']
-                    # so use a custom dataclass instead
-                    gotype = GolangType.from_bv(self.bv,
-                                                go_data_type.address,
-                                                rodata.start,
-                                                go_version
-                                                )
-                    type_name = TypeName.from_bv(self.bv,
-                                                 gotype.resolved_name_addr,
-                                                 go_version
-                                                 )
-                    name = type_name.name
-                    if not name or len(name) == 0:
-                        log_debug("Invalid Name, skipping")
-                    log_debug(f"Found name at 0x{gotype.resolved_name_addr:x} with value {name}")
-                    sanitazed_name = sanitize_gotype_name(name)
-                    go_data_type.name = f"{sanitazed_name}_type"
-                    # add cross-reference for convenience (both directions)
-                    self.bv.add_user_data_ref(
-                        gotype.address_off('nameOff'),
-                        gotype.resolved_name_addr)
-
-                    self.bv.add_user_data_ref(
-                        gotype.resolved_name_addr,
-                        gotype.address_off('nameOff')
-                    )
-
-                    name_datavar = self.bv.get_data_var_at(gotype.resolved_name_addr)
-                    name_datavar.name = f"{go_data_type.name}_name"
-                    already_parsed.add(param)
-                    created += 1
-
-        log_info(f"Created {created} types")
+                    data_vars.append((mlil.params[0].value.value, 0))
+        return data_vars
 
     def run(self):
         return self.create_types()
@@ -441,6 +473,11 @@ def rename_functions(bv):
 
 def create_types(bv):
     helper = TypeParser(bv)
+    return helper.start()
+
+
+def create_type_at_address(bv, address):
+    helper = TypeParser(bv, target=address)
     return helper.start()
 
 
