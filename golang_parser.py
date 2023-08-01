@@ -6,7 +6,6 @@ from binaryninja import Symbol, SymbolType
 from .binaryninja_types import *
 from .types import *
 
-
 NAME = 'Golang Loader Helper'
 GoFixLogger = bn.Logger(0, NAME)
 
@@ -14,6 +13,7 @@ log_debug = GoFixLogger.log_debug
 log_info = GoFixLogger.log_info
 log_warn = GoFixLogger.log_warn
 log_error = GoFixLogger.log_error
+
 
 log_debug = log_info
 
@@ -36,18 +36,19 @@ class GoHelper(bn.plugin.BackgroundTaskThread):
         self.bv = bv
         self.br = bn.binaryview.BinaryReader(bv)
         # Consider caching the table as class variable
-        self.gopclntab = None
+        self.gopclntab = self.init_gopclntab()
 
     def init_gopclntab(self):
-
         gopclntab = self.get_section_by_name(".gopclntab")
-
         if gopclntab:
             start_addr = gopclntab.start
             end_addr = gopclntab.end
         else:
+            log_debug("Failed to find .gopclntab section")
             for go_magic in [go12magic, go116magic, go118magic, go120magic]:
                 start_addr = self.bv.find_next_data(0, go_magic)
+                if start_addr is None:
+                    continue
                 # We do not have an end, suppose the end of the allocated range
                 for allocated_range in self.bv.allocated_ranges:
                     if start_addr in allocated_range:
@@ -66,7 +67,8 @@ class GoHelper(bn.plugin.BackgroundTaskThread):
                                    end_addr,
                                    self.bv[start_addr:end_addr]
                                    )
-
+        log_debug(f"Found .gopclntab at {hex(start_addr)}")
+        log_debug(f"Found .gopclntab  {self.gopclntab}")
         log_info(f"gopclntab version is {self.gopclntab.version}")
 
         if self.gopclntab.version != GoVersion.ver12:
@@ -118,7 +120,8 @@ class GoHelper(bn.plugin.BackgroundTaskThread):
             self.gopclntab.functab = self.gopclntab.data_after_offset(8 + self.gopclntab.ptrsize)
             self.gopclntab.functabsize = (self.gopclntab.nfunctab * 2 + 1) * functabFieldSize
             fileoff = struct.unpack("I",
-                                    self.gopclntab.functab[self.gopclntab.functabsize:self.gopclntab.functabsize + 4])[0]
+                                    self.gopclntab.functab[self.gopclntab.functabsize:self.gopclntab.functabsize + 4])[
+                0]
             self.gopclntab.functab = self.gopclntab.functab[:self.gopclntab.functabsize]
             self.gopclntab.filetab = self.gopclntab.data_after_offset(fileoff)
             self.gopclntab.nfiletab = struct.unpack("I", self.gopclntab.filetab[:4])[0]
@@ -170,7 +173,9 @@ class GoHelper(bn.plugin.BackgroundTaskThread):
         return self.gopclntab.ptrsize
 
     def quick_go_version(self) -> GoVersion:
-        gopclntab = self.get_section_by_name(".gopclntab")
+        if self.gopclntab is None:
+            self.init_gopclntab()
+        gopclntab = self.gopclntab
         start_addr = gopclntab.start
         return GoVersion.from_magic(self.bv[start_addr:start_addr + 6])
 
@@ -255,7 +260,6 @@ class PrintFiles(GoHelper):
 
 
 class FunctionCommenter(GoHelper):
-
     OVERRIDE_COMMENT = True
     COMMENT_KEY = "File:"
 
