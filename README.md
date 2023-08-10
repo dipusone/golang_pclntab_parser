@@ -1,3 +1,7 @@
+## Why did fork have a new project?
+
+This project originally existed as the pr of the original project, and several bug were fixed when I submitted the pr. When the original author accepts the fork, I will delete the project, otherwise it will exist forever.
+
 # GoLang binary parser
 Author: **Jacopo Ferrigno**
 
@@ -27,3 +31,4 @@ The plugin is based on the following resources.
 ## License
 
 This plugin is released under an [MIT license](./license).
+
