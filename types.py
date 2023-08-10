@@ -1,13 +1,12 @@
 import dataclasses
 import struct
-
 from dataclasses import dataclass
 from enum import IntEnum
 from operator import attrgetter
 
 import binaryninja
 
-go12magic  = b"\xfb\xff\xff\xff\x00\x00"
+go12magic = b"\xfb\xff\xff\xff\x00\x00"
 go116magic = b"\xfa\xff\xff\xff\x00\x00"
 go118magic = b"\xf0\xff\xff\xff\x00\x00"
 go120magic = b"\xf1\xff\xff\xff\x00\x00"
@@ -70,7 +69,6 @@ class LineTableEntry:
 
 @dataclass(repr=False)
 class FuncEntry:
-
     raw: bytes
     ptrsize: int
     textStart: int = 0
@@ -346,8 +344,8 @@ class GoPclnTab:
         return function
 
     def fileName(self, idx) -> bytes:
-        if self.version == GoVersion.ver12:
-            start = 4 * (idx + 1)
+        start = 4 * (idx + 1)
+        if self.version == GoVersion.ver12 and len(self.filetab[start:start + 4]) == 4:
             offset = struct.unpack("I", self.filetab[start:start + 4])[0]
             string_end = self.funcdata.find(0, offset)
             string = self.funcdata[offset:string_end]
@@ -400,6 +398,8 @@ class GoPclnTab:
 
         compilation_unit_offset = function.cuOffset
         start = (compilation_unit_offset + offset) * 4
+        if len(self.cutab[start:start + 4]) != 4:
+            return b''
         offset = struct.unpack("I", self.cutab[start:start + 4])[0]
         if offset != self.make_mask(4):
             string_end = self.filetab.find(0, offset)
@@ -558,7 +558,6 @@ class GolangTypeKind(IntEnum):
 
 @dataclass(repr=False)
 class GolangType:
-
     raw: bytes
     rodata_start: int
 
@@ -666,7 +665,6 @@ class GolangType:
 
 @dataclass(repr=False)
 class TypeName:
-
     raw: bytes
 
     bitfield: int
