@@ -120,8 +120,7 @@ class GoHelper(bn.plugin.BackgroundTaskThread):
             self.gopclntab.functab = self.gopclntab.data_after_offset(8 + self.gopclntab.ptrsize)
             self.gopclntab.functabsize = (self.gopclntab.nfunctab * 2 + 1) * functabFieldSize
             fileoff = struct.unpack("I",
-                                    self.gopclntab.functab[self.gopclntab.functabsize:self.gopclntab.functabsize + 4])[
-                0]
+                                    self.gopclntab.functab[self.gopclntab.functabsize:self.gopclntab.functabsize + 4])[0]
             self.gopclntab.functab = self.gopclntab.functab[:self.gopclntab.functabsize]
             self.gopclntab.filetab = self.gopclntab.data_after_offset(fileoff)
             self.gopclntab.nfiletab = struct.unpack("I", self.gopclntab.filetab[:4])[0]

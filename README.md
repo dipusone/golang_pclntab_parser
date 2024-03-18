@@ -1,7 +1,3 @@
-## Why did fork have a new project?
-
-This project originally existed as the pr of the original project, and several bug were fixed when I submitted the pr. When the original author accepts the fork, I will delete the project, otherwise it will exist forever.
-
 # GoLang binary parser
 Author: **Jacopo Ferrigno**
 
@@ -27,6 +23,10 @@ The plugin is based on the following resources.
 	https://securelist.com/extracting-type-information-from-go-binaries/104715/
 	https://github.com/golang/go/blob/fad4a16fd43f6a72b6917eff656be27522809074/src/reflect/type.go#L317
 
+
+## Contributors
+
+- [ltlly](https://github.com/ltlly)
 
 ## License
 

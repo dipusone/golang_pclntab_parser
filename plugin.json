@@ -24,6 +24,6 @@
       "Windows": "no special instructions, package manager is recommended",
       "Linux": "no special instructions, package manager is recommended"
    },
-   "version": "1.3",
+   "version": "1.4",
    "minimumbinaryninjaversion": 3946
 }
