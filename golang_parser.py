@@ -222,13 +222,15 @@ class FunctionRenamer(GoHelper):
                 created += 1
 
             if name and len(name) > self.MIN_FUNCTION_NAME:
-                name = santize_gofunc_name(name)
-                sym = Symbol(SymbolType.FunctionSymbol,
-                             function_addr,
-                             name,
-                             name)
-                self.bv.define_user_symbol(sym)
-                renamed += 1
+                # Don't rename functions which already have the correct name
+                if func.name != name:
+                    name = santize_gofunc_name(name)
+                    sym = Symbol(SymbolType.FunctionSymbol,
+                                 function_addr,
+                                 name,
+                                 name)
+                    self.bv.define_user_symbol(sym)
+                    renamed += 1
             else:
                 log_warn(f"not using function name {name} for function at {hex(function_addr)}")
 
