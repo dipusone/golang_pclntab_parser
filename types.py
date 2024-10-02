@@ -207,7 +207,13 @@ class GoPclnTab:
         self.start = start
         self.end = end
         self.raw = raw
-        self.version = GoVersion.from_magic(raw[:6])
+        version = binaryninja.Settings().get_string("golang_pclntab_parser.golangVersion")
+        self.version = {
+            "1.2": GoVersion.ver12,
+            "1.16": GoVersion.ver116,
+            "1.18": GoVersion.ver118,
+            "1.20": GoVersion.ver120,
+        }.get(version) or GoVersion.from_magic(raw[:6])
         self.valid_ptr_sizes = [4, 8]
 
     def functabFieldSize(self) -> int:
