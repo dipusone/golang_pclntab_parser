@@ -1,17 +1,20 @@
 # GoLang binary parser
 Author: **Jacopo Ferrigno**
 
-_BinaryNinja plugin to parse GoLang binaries and restore some information, like function names and type information._
+_BinaryNinja plugin to parse GoLang binaries and restore some information, like function names, type information and recover the user defined types._
 
 ## Description:
 
 This plugin will parse a go binary and restore some information like:
+
 - Function names by parsing the `.gopclntab` section in the binary. If there is no section named .gopclntab it will try to search for it.
+- Recover the user defined Go types and de ones defined by the runtime
+- Create the user defined/runtime defined Go types as `Types` in Binary Ninja
+- Rename functions with their original name and organize them in containers
 - Comment the function with the filename from which the function comes
 - Print the list of files in the binary
-- Recover type information and names by parsing specific callsites gopclntab.
 
-The plugin works for all GoLang version from 12 to 119.
+The plugin works for all GoLang version from 12 to 124.
 
 ## References
 
